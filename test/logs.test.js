@@ -95,3 +95,15 @@ test('a command from Gladys writes one line; never the token, even at debug', as
   assert.ok(!all.includes('secret_wrong_token'), 'never a refused token');
   assert.ok(!all.includes('secret_wrong_pw'), 'never an API password');
 });
+
+test('an outage after a fixed configuration is logged again', async (t) => {
+  const logs = captureLogs(t);
+  const w = await world(t, { config: { url: 'http://192.0.2.20:8001', api_token: 'wrong' } });
+  await w.fake.configUpdated({ url: 'http://192.0.2.20:8001', api_token: TOKEN });
+  await w.app.ready;
+  logs.clear();
+  w.server.online = false;
+  await w.hub.poll();
+  assert.equal(logs.lines.length, 1, logs.texts().join('\n'));
+  assert.match(logs.lines[0].text, /ECONNREFUSED/);
+});

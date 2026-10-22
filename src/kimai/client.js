@@ -15,7 +15,8 @@
 //   GET   /api/config/timesheet            { activeEntriesHardLimit, … }
 //   GET   /api/timesheets/active           running entries, project and activity as objects
 //   GET   /api/timesheets?begin=&size=&page=   the user's entries, most recent first
-//   GET   /api/projects, /api/activities, /api/customers
+//   GET   /api/timesheets/:id              one entry (a stop seen after the window)
+//   GET   /api/projects, /api/activities, /api/customers   with visible=3: hidden ones too
 //   POST  /api/timesheets                  start (no `end`): { project, activity, description }
 //   PATCH /api/timesheets/:id/stop         stop
 //   PATCH /api/timesheets/:id/restart      a new running copy of an entry
@@ -224,26 +225,35 @@ export class KimaiClient {
     });
   }
 
+  async timesheet(id) {
+    const { data } = await this.call(`/timesheets/${encodeURIComponent(id)}`);
+    return data;
+  }
+
+  /** The user's last entries, whatever their date (most recent first). */
+  async latest(size = 20) {
+    return this.list(`/timesheets?${new URLSearchParams({ size: String(size) })}`);
+  }
+
   async list(path) {
     const { data } = await this.call(path);
     return Array.isArray(data) ? data : [];
   }
 
+  // `visible=3`: the hidden ones too (a finished project, named in this
+  // month's entries); `visible: false` in the answer tells them apart.
   projects() {
-    return this.list('/projects');
+    return this.list('/projects?visible=3');
   }
 
   /** Every activity, or the ones a project accepts (its own and the global ones). */
   activities(projectId) {
-    return this.list(
-      projectId
-        ? `/activities?${new URLSearchParams({ project: String(projectId) })}`
-        : '/activities',
-    );
+    const query = { visible: '3', ...(projectId ? { project: String(projectId) } : {}) };
+    return this.list(`/activities?${new URLSearchParams(query)}`);
   }
 
   customers() {
-    return this.list('/customers');
+    return this.list('/customers?visible=3');
   }
 
   /** Start a timer now. */

@@ -43,7 +43,9 @@ export const SCENE_ACTIONS = {
       description: fields.description,
     });
     if (!result.running) {
-      return { running: false, ...stoppedOutputs(result) };
+      // `stopped` is not an output of this action (manifest).
+      const { stopped: _count, ...outputs } = stoppedOutputs(result);
+      return { running: false, ...outputs };
     }
     return {
       running: true,

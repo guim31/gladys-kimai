@@ -270,3 +270,14 @@ Vérifié contre `kimai/kimai2:apache` 2.70.2 + MariaDB 11 en Docker (22/10/2026
   est vérifiée chaque minute par un tic sans requête.
 - Les filtres d'un déclencheur doivent être des clés des `variables` (le cœur les cherche dans `data`) :
   `project_name`, `activity_name` (test dans `test/manifest.test.js`).
+- `/api/projects`, `/api/activities`, `/api/customers` ne rendent **que les éléments visibles** par défaut : lire avec
+  `visible=3` pour nommer les saisies d'un projet masqué depuis (`visible: false` dans la réponse), et filtrer sur
+  `visible` pour les commandes et les boutons du widget. Un id resté inconnu n'est relu qu'à la demi-heure.
+- Avec un seul chrono permis, ne pas arrêter soi-même le chrono avant un `POST /api/timesheets` : Kimai l'arrête
+  **seulement si** la nouvelle saisie est acceptée ; un démarrage refusé (400) ne perd ainsi pas le chrono en cours.
+- Un chrono commencé avant la fenêtre lue (oublié sur un week-end en début de mois) : à son arrêt, il est relu par
+  `GET /api/timesheets/{id}` (404 : supprimé, rien ne part). « Reprendre » se rabat sur les dernières saisies sans
+  `begin`.
+- La bascule (`toggle`) décide **et** agit dans un seul tour de la file des commandes (`command`), par les versions
+  `…Now` : appeler `stopTimers()` depuis la file la bloquerait.
+- Le tic de la limite du jour **relit Kimai** avant de déclencher sur la seule estimation d'un chrono en cours.

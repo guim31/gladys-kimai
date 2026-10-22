@@ -160,8 +160,8 @@ async function action(hub, { actionKey, params = {} }) {
     return { message: KimaiHub.stoppedMessage(stopped) };
   }
   if (actionKey === ACTIONS.RESUME) {
-    const { label } = await hub.resumeLast();
-    return { message: KimaiHub.startedMessage(label) };
+    const { label, already } = await hub.resumeLast();
+    return { message: KimaiHub.startedMessage(label, already) };
   }
   if (
     ACTIONS.START.includes(actionKey) &&

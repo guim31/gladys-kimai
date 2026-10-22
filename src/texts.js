@@ -176,21 +176,25 @@ export const ACTION_TEXT = {
 export const DONE_TEXT = {
   en: {
     started: (label) => `Timer started: ${label}.`,
+    already: (label) => `Timer already running: ${label}.`,
     stopped: (label, minutes) => `Timer stopped: ${label}, ${hm(minutes)}.`,
     none: 'No timer was running.',
   },
   fr: {
     started: (label) => `Chrono démarré : ${label}.`,
+    already: (label) => `Chrono déjà en cours : ${label}.`,
     stopped: (label, minutes) => `Chrono arrêté : ${label}, ${hm(minutes)}.`,
     none: 'Aucun chrono ne tournait.',
   },
   de: {
     started: (label) => `Zeitmessung gestartet: ${label}.`,
+    already: (label) => `Zeitmessung läuft bereits: ${label}.`,
     stopped: (label, minutes) => `Zeitmessung gestoppt: ${label}, ${hm(minutes)}.`,
     none: 'Es lief keine Zeitmessung.',
   },
   es: {
     started: (label) => `Cronómetro iniciado: ${label}.`,
+    already: (label) => `Cronómetro ya en marcha: ${label}.`,
     stopped: (label, minutes) => `Cronómetro detenido: ${label}, ${hm(minutes)}.`,
     none: 'No había ningún cronómetro en marcha.',
   },

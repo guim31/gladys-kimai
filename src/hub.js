@@ -58,6 +58,8 @@ export const HUB_TIMINGS = {
   catalogMs: 30 * 60_000,
   // Re-send unchanged values this often: Gladys shows "no recent value" after 48 h.
   heartbeatMs: 12 * 60 * 60_000,
+  // After a 429, the next reading waits at least this long.
+  rateLimitMs: 5 * 60_000,
   // A start this old when first seen (Gladys or the integration was down) fires nothing.
   maxLateMs: 60 * 60_000,
 };
@@ -117,6 +119,7 @@ export class KimaiHub {
     this.activities = new Map();
     this.customers = new Map();
     this.catalogAt = 0;
+    this.catalogMissing = new Set();
     this.error = null;
     this.downSince = null;
     this.readAt = 0;
@@ -222,6 +225,10 @@ export class KimaiHub {
 
   nextDelay() {
     const interval = this.config.pollIntervalMs;
+    if (this.error?.kind === ERROR_KINDS.RATE_LIMIT) {
+      // Kimai limits the requests (the old API password above all): slow down.
+      return Math.max(interval, this.timings.rateLimitMs);
+    }
     return this.error ? Math.min(interval, this.timings.retryMs) : interval;
   }
 
@@ -321,14 +328,14 @@ export class KimaiHub {
 
   /** Projects, activities and customers: every half hour, or for an unknown id. */
   async refreshCatalog(now) {
-    const unknown = this.entries.some(
-      (entry) => !this.projects.has(entry.projectId) || !this.activities.has(entry.activityId),
-    );
-    if (!unknown && now - this.catalogAt < this.timings.catalogMs) {
-      return;
-    }
-    if (unknown && now - this.catalogAt < this.timings.retryMs) {
-      // A deleted project stays unknown: not read again on every poll.
+    const unknown = this.entries
+      .filter(
+        (entry) => !this.projects.has(entry.projectId) || !this.activities.has(entry.activityId),
+      )
+      .map((entry) => `${entry.projectId}/${entry.activityId}`)
+      .filter((key) => !this.catalogMissing.has(key));
+    if (unknown.length === 0 && now - this.catalogAt < this.timings.catalogMs) {
+      // An id still unknown after a reading (deleted) waits for the next half hour.
       return;
     }
     const [projects, activities, customers] = await Promise.all([
@@ -341,13 +348,23 @@ export class KimaiHub {
     this.activities = byId(parseNamed(activities, 'project'));
     this.customers = byId(parseNamed(customers));
     this.catalogAt = now;
+    this.catalogMissing = new Set(
+      this.entries
+        .filter(
+          (entry) => !this.projects.has(entry.projectId) || !this.activities.has(entry.activityId),
+        )
+        .map((entry) => `${entry.projectId}/${entry.activityId}`),
+    );
   }
 
   recovered(now) {
     const host = hostOf(this.config.url);
-    if (this.downSince !== null) {
-      const minutes = Math.round((now - this.downSince) / 60_000);
-      this.resolved('read', `Kimai at ${host} answers again after ${minutes} min`);
+    if (this.warned.has('read')) {
+      // Also after a reconfiguration (which resets `downSince`): the next
+      // outage must be logged again.
+      const minutes =
+        this.downSince === null ? '' : ` after ${Math.round((now - this.downSince) / 60_000)} min`;
+      this.resolved('read', `Kimai at ${host} answers again${minutes}`);
     }
     if (!this.connectedLogged) {
       this.connectedLogged = true;
@@ -491,7 +508,12 @@ export class KimaiHub {
       return;
     }
     const now = this.now();
-    await this.checkDailyLimit(now);
+    if (this.running && this.limitDue(now)) {
+      // Reached only by the running timer, estimated since the last reading:
+      // read first, it may have been stopped in Kimai meanwhile.
+      await this.poll();
+      return;
+    }
     await this.publishStates(now);
   }
 
@@ -594,45 +616,82 @@ export class KimaiHub {
       });
       return;
     }
+    // Updated event by event: one refused (Gladys restarting?) is tried again
+    // at the next reading, the ones delivered are not.
     const known = new Set(this.saved.active);
     const current = new Set(activeIds);
-    let delivered = true;
     for (const id of this.saved.active) {
       if (current.has(id)) {
         continue;
       }
       // Gone from the active list: stopped, or deleted (then nothing fires).
-      const entry = this.entries.find((item) => item.id === id && item.end !== null);
-      if (entry) {
-        delivered =
-          (await this.fire(TRIGGERS.STOPPED, {
-            ...this.eventData(entry),
-            duration_minutes: Math.floor(entry.duration / 60),
-          })) && delivered;
+      const entry = await this.stoppedEntry(id);
+      if (entry === undefined) {
+        continue; // Kimai did not answer: tried again at the next reading
+      }
+      if (
+        entry === null ||
+        (await this.fire(TRIGGERS.STOPPED, {
+          ...this.eventData(entry),
+          duration_minutes: Math.floor(entry.duration / 60),
+        }))
+      ) {
+        known.delete(id);
       }
     }
     for (const entry of [...this.active].reverse()) {
-      if (!known.has(entry.id) && entry.begin >= now - this.timings.maxLateMs) {
-        delivered = (await this.fire(TRIGGERS.STARTED, this.eventData(entry))) && delivered;
+      if (known.has(entry.id)) {
+        continue;
+      }
+      if (
+        entry.begin < now - this.timings.maxLateMs ||
+        (await this.fire(TRIGGERS.STARTED, this.eventData(entry)))
+      ) {
+        known.add(entry.id);
       }
     }
-    if (delivered) {
-      // Refused (Gladys restarting?): the same events are tried at the next reading.
-      this.save({ active: activeIds });
-    }
+    this.save({ active: [...known] });
     await this.checkDailyLimit(now);
   }
 
-  async checkDailyLimit(now) {
+  /**
+   * A stopped entry: from the window, or asked to Kimai when it began before
+   * it (a timer forgotten over a weekend). Null when deleted, undefined when
+   * Kimai did not answer.
+   */
+  async stoppedEntry(id) {
+    const known = this.entries.find((item) => item.id === id);
+    if (known) {
+      return known.end !== null ? known : null;
+    }
+    try {
+      const [entry] = parseTimesheets([await this.client.timesheet(id)]);
+      return entry && entry.end !== null ? entry : null;
+    } catch (err) {
+      if (err instanceof KimaiError && (err.status === 404 || err.status === 403)) {
+        return null;
+      }
+      return undefined;
+    }
+  }
+
+  /** The daily limit is passed today and has not fired yet. */
+  limitDue(now) {
     const limit = this.config.dailyLimitSeconds;
     if (limit === null || this.saved.scope !== this.scope()) {
-      return;
+      return false;
     }
     const day = periods(now, this.timeZone).day.start;
-    const { todaySeconds } = this.view(now);
-    if (this.saved.limitDay === day || todaySeconds < limit) {
+    return this.saved.limitDay !== day && this.view(now).todaySeconds >= limit;
+  }
+
+  async checkDailyLimit(now) {
+    if (!this.limitDue(now)) {
       return;
     }
+    const limit = this.config.dailyLimitSeconds;
+    const day = periods(now, this.timeZone).day.start;
+    const { todaySeconds } = this.view(now);
     const fired = await this.fire(TRIGGERS.DAILY_LIMIT, {
       hours_today: Math.round((todaySeconds / 3600) * 100) / 100,
       limit_hours: Math.round((limit / 3600) * 100) / 100,
@@ -722,36 +781,41 @@ export class KimaiHub {
     return parseTimesheets(raw);
   }
 
+  // The commands: each public one runs in the queue (`command`); the `…Now`
+  // versions run inside it, so `toggle` decides and acts in one turn.
+
+  /** Stop every running timer. */
+  stopTimers() {
+    return this.command(() => this.stopNow());
+  }
+
   /**
-   * Stop every running timer.
    * @returns {Promise<{ stopped: Array<{ entry: object, label: string, projectName: string,
    *   activityName: string, minutes: number }> }>}
    */
-  stopTimers() {
-    return this.command(async () => {
-      const client = this.requireClient();
-      const stopped = [];
-      try {
-        for (const entry of await this.freshActive(client)) {
-          const [done] = parseTimesheets([await client.stop(entry.id)]);
-          const final = done ?? entry;
-          stopped.push({
-            entry: final,
-            label: this.label(final),
-            projectName: this.projectName(final.projectId),
-            activityName: this.activityName(final.activityId),
-            minutes: Math.floor(workedSeconds(final, this.now()) / 60),
-          });
-        }
-      } catch (err) {
-        throw this.explain(err);
+  async stopNow(running) {
+    const client = this.requireClient();
+    const stopped = [];
+    try {
+      for (const entry of running ?? (await this.freshActive(client))) {
+        const [done] = parseTimesheets([await client.stop(entry.id)]);
+        const final = done ?? entry;
+        stopped.push({
+          entry: final,
+          label: this.label(final),
+          projectName: this.projectName(final.projectId),
+          activityName: this.activityName(final.activityId),
+          minutes: Math.floor(workedSeconds(final, this.now()) / 60),
+        });
       }
-      if (stopped.length > 0) {
-        logger.info(`${stopped.length} timer(s) stopped from Gladys`);
-        await this.refreshSoon();
-      }
-      return { stopped };
-    });
+    } catch (err) {
+      throw this.explain(err);
+    }
+    if (stopped.length > 0) {
+      logger.info(`${stopped.length} timer(s) stopped from Gladys`);
+      await this.refreshSoon();
+    }
+    return { stopped };
   }
 
   /** Find a visible project by number or name. */
@@ -798,69 +862,80 @@ export class KimaiHub {
    *   false and Kimai allows one timer at a time, a running timer is kept and
    *   nothing starts (an error says so)
    */
-  startTimer({ project, activity, description, stopRunning = false }) {
-    return this.command(async () => {
-      const client = this.requireClient();
-      let entry;
-      try {
-        const foundProject = await this.findProject(client, project);
-        const foundActivity = await this.findActivity(client, foundProject, activity);
-        const running = await this.freshActive(client);
-        if (running.length > 0) {
-          if (stopRunning) {
-            for (const item of running) {
-              await client.stop(item.id);
-            }
-          } else if (running.length >= this.hardLimit) {
-            throw new Error(pick(ACTION_TEXT.alreadyRunning, this.language));
+  startTimer(options) {
+    return this.command(() => this.startNow(options));
+  }
+
+  async startNow({ project, activity, description, stopRunning = false }) {
+    const client = this.requireClient();
+    let entry;
+    try {
+      const foundProject = await this.findProject(client, project);
+      const foundActivity = await this.findActivity(client, foundProject, activity);
+      const running = await this.freshActive(client);
+      if (running.length > 0) {
+        if (!stopRunning && running.length >= this.hardLimit) {
+          throw new Error(pick(ACTION_TEXT.alreadyRunning, this.language));
+        }
+        if (stopRunning && this.hardLimit > 1) {
+          // With one timer at a time, Kimai stops the running one itself, and
+          // only if the new one is accepted: a refused start loses nothing.
+          for (const item of running) {
+            await client.stop(item.id);
           }
         }
-        const text =
-          String(description ?? '')
-            .trim()
-            .slice(0, 1000) || NO_DESCRIPTION;
-        [entry] = parseTimesheets([
-          await client.start({
-            project: foundProject.id,
-            activity: foundActivity.id,
-            description: text,
-          }),
-        ]);
-      } catch (err) {
-        throw this.explain(err);
       }
-      logger.info(`Timer #${entry?.id} started from Gladys`);
-      await this.refreshSoon();
-      return this.started(entry);
-    });
+      const text =
+        String(description ?? '')
+          .trim()
+          .slice(0, 1000) || NO_DESCRIPTION;
+      [entry] = parseTimesheets([
+        await client.start({
+          project: foundProject.id,
+          activity: foundActivity.id,
+          description: text,
+        }),
+      ]);
+    } catch (err) {
+      throw this.explain(err);
+    }
+    logger.info(`Timer #${entry?.id} started from Gladys`);
+    await this.refreshSoon();
+    return this.started(entry);
   }
 
   /** Resume the last stopped entry: a new timer, same project, activity and description. */
   resumeLast() {
-    return this.command(async () => {
-      const client = this.requireClient();
-      let entry;
-      try {
-        const running = await this.freshActive(client);
-        if (running.length > 0) {
-          // Already running: nothing to do (the switch is already on).
-          return this.started(running[0]);
-        }
-        if (this.readAt === 0) {
-          await this.poll();
-        }
-        const last = this.lastStopped();
-        if (!last) {
-          throw new Error(pick(ACTION_TEXT.nothingToResume, this.language));
-        }
-        [entry] = parseTimesheets([await client.restart(last.id)]);
-      } catch (err) {
-        throw this.explain(err);
+    return this.command(() => this.resumeNow());
+  }
+
+  async resumeNow() {
+    const client = this.requireClient();
+    let entry;
+    try {
+      const running = await this.freshActive(client);
+      if (running.length > 0) {
+        // Already running: nothing to do (the switch is already on).
+        return { ...this.started(running[0]), already: true };
       }
-      logger.info(`Timer #${entry?.id} resumed from Gladys`);
-      await this.refreshSoon();
-      return this.started(entry);
-    });
+      if (this.readAt === 0) {
+        await this.poll();
+      }
+      // Nothing stopped in the window (a holiday, the 1st of the month after
+      // a weekend): the last entries, whatever their date.
+      const last =
+        this.lastStopped() ??
+        parseTimesheets(await client.latest()).find((item) => item.end !== null);
+      if (!last) {
+        throw new Error(pick(ACTION_TEXT.nothingToResume, this.language));
+      }
+      [entry] = parseTimesheets([await client.restart(last.id)]);
+    } catch (err) {
+      throw this.explain(err);
+    }
+    logger.info(`Timer #${entry?.id} resumed from Gladys`);
+    await this.refreshSoon();
+    return this.started(entry);
   }
 
   started(entry) {
@@ -875,18 +950,20 @@ export class KimaiHub {
   }
 
   /** Stop when a timer runs; otherwise start the project and activity given, or resume. */
-  async toggle({ project, activity, description } = {}) {
-    const running = await this.freshActive(this.requireClient()).catch((err) => {
-      throw this.explain(err);
+  toggle({ project, activity, description } = {}) {
+    return this.command(async () => {
+      const running = await this.freshActive(this.requireClient()).catch((err) => {
+        throw this.explain(err);
+      });
+      if (running.length > 0) {
+        return { running: false, ...(await this.stopNow(running)) };
+      }
+      const given = String(project ?? '').trim() !== '' || String(activity ?? '').trim() !== '';
+      const started = given
+        ? await this.startNow({ project, activity, description })
+        : await this.resumeNow();
+      return { running: true, started };
     });
-    if (running.length > 0) {
-      return { running: false, ...(await this.stopTimers()) };
-    }
-    const given = String(project ?? '').trim() !== '' || String(activity ?? '').trim() !== '';
-    const started = given
-      ? await this.startTimer({ project, activity, description })
-      : await this.resumeLast();
-    return { running: true, started };
   }
 
   /** The switch of the device: 1 resumes the last entry, 0 stops the timer. */
@@ -903,8 +980,10 @@ export class KimaiHub {
   }
 
   /** The toast of a command, in the four languages. */
-  static startedMessage(label) {
-    return allLanguages((language) => DONE_TEXT[language].started(label).slice(0, 200));
+  static startedMessage(label, already = false) {
+    return allLanguages((language) =>
+      DONE_TEXT[language][already ? 'already' : 'started'](label).slice(0, 200),
+    );
   }
 
   static stoppedMessage(stopped) {

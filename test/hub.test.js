@@ -386,3 +386,127 @@ test('kimai.cloud is a cloud transport', async (t) => {
   assert.equal(w.hub.config.url, 'https://demo.kimai.cloud');
   assert.equal(w.fake.transports.at(-1).transport, 'cloud');
 });
+
+// --- Found by the review -------------------------------------------------------------
+
+test('a partly refused batch fires again only the refused event', async (t) => {
+  const w = await world(t);
+  w.server.stopEntry(w.server.entry(4));
+  w.server.startEntry({ project: 2, activity: 3 });
+  const original = w.gladys.publishSceneEvent.bind(w.gladys);
+  w.gladys.publishSceneEvent = async (key, data) => {
+    if (key === 'timer_started') {
+      throw new Error('503');
+    }
+    return original(key, data);
+  };
+  await w.hub.poll();
+  w.gladys.publishSceneEvent = original;
+  await w.hub.poll();
+  assert.deepEqual(keys(w), ['timer_stopped', 'timer_started']);
+});
+
+test('a hidden project is still named, and its couple is no start button', async (t) => {
+  const clock = createClock();
+  const server = new FakeKimai({ now: clock.now });
+  server.projects.find((project) => project.id === 2).visible = false;
+  const w = await world(t, { clock, server });
+  const reads = () => server.requests.filter((r) => r.path === '/api/projects').length;
+  assert.equal(w.hub.label(w.hub.entries.find((entry) => entry.id === 8)), 'Maintenance · Support');
+  assert.deepEqual(
+    w.hub.recent().map((couple) => couple.projectId),
+    [1],
+  );
+  // A deleted activity stays unknown: the catalog is not read again on every poll.
+  server.entries.push({ ...server.entry(1), id: 50, activity: 99 });
+  await w.hub.poll();
+  const after = reads();
+  await w.hub.poll();
+  await w.hub.poll();
+  assert.equal(reads(), after);
+});
+
+test('a timer started before the read window still fires its stop', async (t) => {
+  const clock = createClock();
+  const server = new FakeKimai({ now: clock.now });
+  server.stopEntry(server.entry(4));
+  // Forgotten since 25/09, before the window (from 30/09).
+  server.entries.push({ ...server.entry(5), id: 60, begin: '2026-09-25T17:00:00+0200', end: null });
+  const w = await world(t, { clock, server });
+  assert.equal(state(w, 'running'), 1);
+  server.stopEntry(server.entry(60));
+  await w.hub.poll();
+  assert.deepEqual(keys(w), ['timer_stopped']);
+  assert.equal(w.fake.sceneEvents[0].data.timesheet_id, 60);
+});
+
+test('resume finds the last entry beyond the window', async (t) => {
+  const clock = createClock(Date.UTC(2026, 11, 1, 8)); // 1/12, nothing since 22/10
+  const server = new FakeKimai({ now: clock.now });
+  server.stopEntry(server.entry(4));
+  const w = await world(t, { clock, server });
+  const ack = await w.fake.sceneAction('toggle_timer', {});
+  assert.equal(ack.success, true, ack.error);
+  assert.equal(server.running[0].description, 'Intégration Gladys');
+});
+
+test('two toggles at once, several timers allowed: one starts, the second stops it', async (t) => {
+  const clock = createClock();
+  const server = new FakeKimai({ now: clock.now });
+  server.hardLimit = 3;
+  server.stopEntry(server.entry(4));
+  const w = await world(t, { clock, server });
+  const fields = { project: '1', activity: '1' };
+  const acks = await Promise.all([
+    w.fake.sceneAction('toggle_timer', fields),
+    w.fake.sceneAction('toggle_timer', fields),
+  ]);
+  assert.deepEqual(
+    acks.map((ack) => ack.data.outputs.running),
+    [true, false],
+  );
+  assert.equal(server.running.length, 0);
+  assert.equal(acks[1].data.outputs.stopped, undefined, 'not a declared output');
+});
+
+test('the limit reached by the estimate of a stopped timer is read first', async (t) => {
+  const w = await world(t, { config: { ...BASE_CONFIG, daily_limit: '3' } });
+  w.clock.advance(20 * MINUTE);
+  w.server.stopEntry(w.server.entry(4)); // stopped in Kimai at 2 h 52
+  w.clock.advance(10 * MINUTE);
+  await w.hub.tick();
+  assert.deepEqual(keys(w), ['timer_stopped'], 'no limit: the day ends at 2 h 52');
+});
+
+test('with the option ticked, a refused start keeps the running timer', async (t) => {
+  const w = await world(t);
+  const handle = w.server.handle.bind(w.server);
+  w.server.handle = async (url, options) =>
+    options?.method === 'POST'
+      ? {
+          status: 400,
+          headers: {},
+          body: JSON.stringify({ code: 400, message: 'Validation Failed' }),
+        }
+      : handle(url, options);
+  const ack = await w.fake.sceneAction('start_timer', {
+    project: '2',
+    activity: '3',
+    stop_running: true,
+  });
+  assert.equal(ack.success, false);
+  assert.equal(w.server.entry(4).end, null);
+});
+
+test('a 429 slows the readings down instead of speeding them up', async (t) => {
+  const w = await world(t, { config: { ...BASE_CONFIG, poll_interval: '60' } });
+  w.server.handle = async () => ({ status: 429, headers: {}, body: '' });
+  await w.hub.poll();
+  assert.equal(w.hub.nextDelay(), 5 * 60_000);
+});
+
+test('the widget Resume on a running timer says it already runs', async (t) => {
+  const w = await world(t);
+  const ack = await w.fake.widgetAction('timer', 'resume');
+  assert.equal(ack.data.message.en, 'Timer already running: Site web · Développement.');
+});

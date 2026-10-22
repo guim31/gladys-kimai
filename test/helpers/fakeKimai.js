@@ -193,10 +193,11 @@ export class FakeKimai {
           'x-per-page': String(size),
         });
       }
+      // visible=1 by default; 3: the hidden ones too.
       case 'GET /api/projects':
         return json(
           200,
-          this.projects.filter((project) => project.visible),
+          this.projects.filter((project) => project.visible || search.get('visible') === '3'),
         );
       case 'GET /api/activities': {
         const project = Number(search.get('project'));
@@ -204,7 +205,7 @@ export class FakeKimai {
           200,
           this.activities.filter(
             (activity) =>
-              activity.visible &&
+              (activity.visible || search.get('visible') === '3') &&
               (activity.project === null || !project || activity.project === project),
           ),
         );
@@ -231,6 +232,10 @@ export class FakeKimai {
             description: body.description ?? null,
           }),
         );
+      }
+      case 'GET /api/timesheets/:id': {
+        const entry = this.entry(id);
+        return entry ? json(200, entry) : json(404, { code: 404, message: 'Not Found' });
       }
       case 'PATCH /api/timesheets/:id/stop': {
         const entry = this.entry(id);
