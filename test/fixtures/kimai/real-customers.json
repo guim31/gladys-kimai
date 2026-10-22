@@ -1,0 +1,23 @@
+[
+  {
+    "color-safe": "#009688",
+    "id": 1,
+    "name": "Acme SARL",
+    "number": "0002",
+    "comment": null,
+    "visible": true,
+    "billable": true,
+    "company": null,
+    "country": "FR",
+    "language": "en",
+    "currency": "EUR",
+    "phone": null,
+    "fax": null,
+    "mobile": null,
+    "homepage": null,
+    "timezone": "Europe/Paris",
+    "metaFields": [],
+    "teams": [],
+    "color": null
+  }
+]

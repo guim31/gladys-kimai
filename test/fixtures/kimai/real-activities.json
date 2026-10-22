@@ -1,0 +1,44 @@
+[
+  {
+    "parentTitle": null,
+    "project": null,
+    "color-safe": "#e135f4",
+    "id": 1,
+    "name": "D\u00e9veloppement",
+    "comment": null,
+    "visible": true,
+    "billable": true,
+    "metaFields": [],
+    "teams": [],
+    "number": "0002",
+    "color": null
+  },
+  {
+    "parentTitle": null,
+    "project": null,
+    "color-safe": "#01FF70",
+    "id": 2,
+    "name": "R\u00e9union",
+    "comment": null,
+    "visible": true,
+    "billable": true,
+    "metaFields": [],
+    "teams": [],
+    "number": "0003",
+    "color": null
+  },
+  {
+    "parentTitle": "Maintenance",
+    "project": 2,
+    "color-safe": "#FF5722",
+    "id": 3,
+    "name": "Support",
+    "comment": null,
+    "visible": true,
+    "billable": true,
+    "metaFields": [],
+    "teams": [],
+    "number": "0004",
+    "color": null
+  }
+]

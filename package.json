@@ -1,8 +1,8 @@
 {
-  "name": "gladys-integration-template-js",
+  "name": "gladys-kimai",
   "version": "1.0.0",
   "private": true,
-  "description": "Official starter template to build an external integration for Gladys Assistant with the JavaScript SDK.",
+  "description": "Kimai time tracking for Gladys Assistant: running timer, hours of the day, week and month, timers started and stopped from scenes.",
   "type": "module",
   "main": "index.js",
   "scripts": {

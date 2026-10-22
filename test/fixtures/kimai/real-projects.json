@@ -1,0 +1,42 @@
+[
+  {
+    "parentTitle": "Acme SARL",
+    "customer": 1,
+    "color-safe": "#00bb32",
+    "id": 2,
+    "name": "Maintenance",
+    "orderNumber": null,
+    "orderDate": null,
+    "start": null,
+    "end": null,
+    "lockedUntil": null,
+    "comment": null,
+    "visible": true,
+    "billable": true,
+    "metaFields": [],
+    "teams": [],
+    "globalActivities": true,
+    "number": "0003",
+    "color": null
+  },
+  {
+    "parentTitle": "Acme SARL",
+    "customer": 1,
+    "color-safe": "#4CAF50",
+    "id": 1,
+    "name": "Site web",
+    "orderNumber": null,
+    "orderDate": null,
+    "start": null,
+    "end": null,
+    "lockedUntil": null,
+    "comment": null,
+    "visible": true,
+    "billable": true,
+    "metaFields": [],
+    "teams": [],
+    "globalActivities": true,
+    "number": "0002",
+    "color": null
+  }
+]
