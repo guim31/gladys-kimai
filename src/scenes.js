@@ -1,41 +1,55 @@
 // -----------------------------------------------------------------------------
-// Scene actions (SDK v0.14+, Gladys 5.1+).
+// Scene action handlers (manifest `scene_actions`, Gladys 5.1+). The text
+// fields are strings, so a scene variable fits too.
 //
-// A scene action is an OPERATION a scene author places in a scene, with
-// parameters and a result: "identify this device", "take a snapshot", "clean
-// these rooms". Each one is declared in the manifest `scene_actions` field
-// (key, label, `fields` in the config_schema grammar, scalar `outputs`) and
-// handled here, keyed by that same `key`; index.js registers every entry with
-// `gladys.onSceneAction(key, ...)`.
-//
-// Scene TRIGGERS are the other direction ("this happened"): they are fired by
-// the device that observes the event, see src/devices/motionSensor.js.
-//
-// The rules that matter:
-//   - `fields` arrive RESOLVED: scene variables substituted, defaults applied,
-//     validated by the core; a `"source": "devices"` field is the chosen
-//     device external_id;
-//   - resolve an object of the declared `outputs` (scalars only), readable by
-//     the following actions of the scene, or `undefined` for none. Keys not
-//     declared in the manifest are dropped by the core;
-//   - throwing fails THIS action only: the scene logs it and continues. A
-//     scene action is never a condition: return an output and let the scene
-//     author gate on it;
-//   - never fire a scene event as a consequence of a received action: a scene
-//     bound to that event would loop through the integration.
+//   - `start_timer`: start a timer on a project and an activity (a button on
+//     the desk, the arrival at the office), the running one stopped first if
+//     the option is ticked;
+//   - `stop_timer`: stop the running timer (leaving the office, the computer
+//     going to sleep);
+//   - `toggle_timer`: stop when a timer runs, otherwise start the project and
+//     activity given, or resume the last entry (one button for both).
 // -----------------------------------------------------------------------------
 
-import { createLogger } from '@gladysassistant/integration-sdk';
-import { signalDevice } from './devices/index.js';
-
-const logger = createLogger({ name: 'scenes' });
+const stoppedOutputs = ({ stopped }) => {
+  const first = stopped[0];
+  return {
+    stopped: stopped.length,
+    duration_minutes: first ? first.minutes : 0,
+    project_name: first ? first.projectName : '',
+    activity_name: first ? first.activityName : '',
+  };
+};
 
 export const SCENE_ACTIONS = {
-  // The ack is awaited under the action's `timeout_seconds` (15 s in the
-  // manifest), counted from the moment the scene reaches the action.
-  async identify_device(gladys, { fields, config }) {
-    logger.info(`Scene action identify_device <- ${fields.device}`);
-    const signalled = await signalDevice(gladys, fields.device, config);
-    return { signalled };
+  async start_timer(hub, { fields = {} }) {
+    const { entry, projectName, activityName } = await hub.startTimer({
+      project: fields.project,
+      activity: fields.activity,
+      description: fields.description,
+      stopRunning: fields.stop_running === true || fields.stop_running === 'true',
+    });
+    return { timesheet_id: entry.id, project_name: projectName, activity_name: activityName };
+  },
+
+  async stop_timer(hub) {
+    return stoppedOutputs(await hub.stopTimers());
+  },
+
+  async toggle_timer(hub, { fields = {} }) {
+    const result = await hub.toggle({
+      project: fields.project,
+      activity: fields.activity,
+      description: fields.description,
+    });
+    if (!result.running) {
+      return { running: false, ...stoppedOutputs(result) };
+    }
+    return {
+      running: true,
+      duration_minutes: 0,
+      project_name: result.started.projectName,
+      activity_name: result.started.activityName,
+    };
   },
 };

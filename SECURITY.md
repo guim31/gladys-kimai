@@ -30,6 +30,20 @@ Gladys before reporting a problem.
 
 In scope: the code of this repository and the Docker image it publishes.
 
+What the integration handles:
+
+- the **Kimai API token** (or the old API password with its username),
+  stored by Gladys in the integration configuration (a `secret` field), sent
+  only to the configured Kimai address in the `Authorization` (or
+  `X-AUTH-TOKEN`) header, and never logged. It gives the rights of its user:
+  use a plain user, not an administrator;
+- under `/data`, only `kimai-state.json`: the configured address, the Kimai
+  user id, the ids of the running timers last seen and the day the daily
+  limit last fired (no token, no timesheet);
+- network: outgoing HTTP(S) requests to the configured Kimai address only
+  (self-hosted, or `*.kimai.cloud`). With "Accept self-signed certificates"
+  ticked, the certificate of that address is not verified.
+
 Out of scope: Gladys Assistant itself (see its
 [security policy](https://github.com/GladysAssistant/Gladys/security/policy)),
-and the third-party services and devices the integration talks to.
+and Kimai itself.

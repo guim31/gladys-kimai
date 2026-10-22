@@ -31,16 +31,22 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
+index.js                          SDK wiring only (src/app.js), connect, shutdown
+src/app.js                        every SDK handler, registered before connect(); also used by the tests
+src/hub.js                        reads Kimai on its own timers, publishes states, fires scene events, commands
+src/devices.js                    the device of the user: features, names in four languages, states
 src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+src/widgets.js                    the `timer` dashboard widget (manifest `widgets`)
+src/texts.js                      every other text sent to Gladys, in four languages
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
-gladys-assistant-integration.json manifest: name, config_schema, actions, image...
-docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+src/store.js                      /data/kimai-state.json (running timers last seen, day of the limit)
+src/kimai/client.js               the Kimai API calls and their errors
+src/kimai/http.js                 the one network function (node:http/https, self-signed option)
+src/kimai/model.js                entries, local day/week/month (DST-safe), totals, name lookup
+gladys-assistant-integration.json manifest: name, config_schema, actions, triggers, widget...
+docs/en.md, fr.md, de.md, es.md   user documentation, re-hosted by Gladys (same sections)
+test/                             node --test, against the SDK's fake Gladys and test/helpers/fakeKimai.js
+test/fixtures/kimai/              real answers of kimai/kimai2:apache 2.70.2 (anonymized)
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
 
@@ -70,8 +76,9 @@ test/                             node --test, against the SDK's fake Gladys (in
   `type: "provider"`: 5.1.0). `test/manifest.test.js` ties the manifest to the
   code (defaults, action, scene and widget handlers): change both sides
   together.
-- **User-facing text** is bilingual (English and French): action messages,
-  manifest texts, and `docs/en.md` / `docs/fr.md`, kept in sync.
+- **User-facing text** exists in English, French, German ("du") and Spanish
+  ("usted"): action messages, widget texts, feature names, manifest texts, and
+  `docs/en.md`, `fr.md`, `de.md`, `es.md`, kept in sync (`test/i18n.test.js`).
 - **Style.** Prettier formats, ESLint catches mistakes. Comments explain why,
   in English. Tests never touch the network.
 
@@ -233,3 +240,33 @@ long, et sur un « Sie »/« Ihr… » de politesse en allemand. Le store exige 
 - Docs `en`, `fr`, `de`, `es` avec les mêmes sections.
 - Chauffe, ouverture, sécurité : ne rien rendre pilotable « comme un thermostat » ou par un assistant
   vocal quand une erreur serait dangereuse (leçon d'OctoPrint).
+
+## Kimai (intégration propre à ce dépôt)
+
+Vérifié contre `kimai/kimai2:apache` 2.70.2 + MariaDB 11 en Docker (22/10/2026). Détails des routes en tête de
+`src/kimai/client.js`.
+
+- **Authentification** : jeton d'API en `Authorization: Bearer` (Kimai 2.14+), ou l'ancien mot de passe d'API en
+  `X-AUTH-USER` / `X-AUTH-TOKEN` (toujours accepté par 2.70, limité en débit par Kimai). Mauvais jeton : 401 en Bearer,
+  **403** en X-AUTH. Un simple utilisateur (`ROLE_USER`) suffit à tout ce que fait l'intégration.
+- **Créer un jeton sans l'interface** (tests) : la table `kimai2_access_token` (`user_id`, `token`, `name`) stocke le
+  jeton **en clair** ; l'ancien mot de passe est un hash bcrypt dans `kimai2_users.api_token`.
+- **Dates** : `begin` de `GET /api/timesheets` est une date-heure locale **sans fuseau**, lue dans le fuseau du
+  profil de l'utilisateur Kimai, et filtre sur le **début** des saisies. Les réponses portent l'offset sans deux-points
+  (`+0200`), que `Date.parse` accepte. L'intégration lit depuis le début de la semaine ou du mois moins un jour, et
+  compte chaque saisie pour le jour où elle commence, dans le fuseau de Gladys (`TZ`), comme les rapports de Kimai.
+- **Chrono en cours** : `end: null`, `duration: 0` ; le début est arrondi à la minute. `GET /api/timesheets/active`
+  donne projet et activité **en objets** (avec le client), la liste en **identifiants** : les noms viennent de
+  `/api/projects`, `/api/activities`, `/api/customers`, relus toutes les 30 min ou pour un id inconnu.
+- **Un seul chrono à la fois** par défaut (`GET /api/config/timesheet` → `activeEntriesHardLimit: 1`) : un
+  `POST /api/timesheets` arrête alors **de lui-même** le chrono en cours. L'option « Arrêter le chrono en cours »
+  décochée doit donc refuser avant d'appeler Kimai.
+- `PATCH /api/timesheets/{id}/stop` sur une saisie déjà arrêtée répond 200, inchangée ; `PATCH …/restart` avec
+  `{ "copy": "all" }` crée une nouvelle saisie en cours (description et étiquettes copiées).
+- Projet ou activité inconnus : 400 `Validation Failed`, le champ fautif dans `errors.children.<champ>.errors`.
+- Hors `/api`, l'application web redirige (302) ; un chemin d'API inconnu est un 404 en JSON.
+- Les déclencheurs « démarré » / « arrêté » viennent de la **différence des chronos en cours** entre deux lectures
+  (ids gardés dans `/data`) : un chrono démarré et arrêté entre deux lectures ne déclenche rien. La limite du jour
+  est vérifiée chaque minute par un tic sans requête.
+- Les filtres d'un déclencheur doivent être des clés des `variables` (le cœur les cherche dans `data`) :
+  `project_name`, `activity_name` (test dans `test/manifest.test.js`).
