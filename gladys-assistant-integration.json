@@ -8,8 +8,8 @@
     "de": "Kimai-Zeiterfassung: laufende Zeitmessung, Stunden von Tag und Woche, Start oder Stopp per Szene.",
     "es": "Kimai: cronómetro en marcha, horas del día y de la semana, iniciar o detener desde una escena."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/guim31/gladys-kimai:1.0.0",
+  "version": "1.0.1",
+  "docker_image": "ghcr.io/guim31/gladys-kimai:1.0.1",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/guim31/gladys-kimai/main/cover.png",
   "categories": ["services"],

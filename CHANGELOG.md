@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-17
+
 ### Changed
 
 - SDK 0.16.1.
@@ -36,5 +38,6 @@ the notes of the version's GitHub Release.
 - A "Test the connection" button and a connection status naming the problem.
 - Every text in English, French, German and Spanish.
 
-[Unreleased]: https://github.com/guim31/gladys-kimai/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/guim31/gladys-kimai/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/guim31/gladys-kimai/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/guim31/gladys-kimai/releases/tag/v1.0.0

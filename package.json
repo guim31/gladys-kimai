@@ -1,6 +1,6 @@
 {
   "name": "gladys-kimai",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Kimai time tracking for Gladys Assistant: running timer, hours of the day, week and month, timers started and stopped from scenes.",
   "type": "module",
